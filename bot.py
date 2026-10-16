@@ -280,9 +280,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ==== Proses kirim nomor ====
     if stage == "waiting_number":
         nomor = text.replace(" ", "").replace("+", "").replace("-", "")
-        if not nomor.isdigit() or len(nomor) < 8:
-            await update.message.reply_text(T(user.id, "invalid_number"))
-            return
+        if not re.fullmatch(r"[A-Za-z0-9]{4,20}", kode):
+    await update.message.reply_text("❌ Kode harus 4-20 karakter huruf/angka. Contoh: ABC123XY")
+    return
         update_user(user.id, phone=nomor)
         set_pending(user.id, phone=nomor, stage="waiting_code")
         await update.message.reply_text(T(user.id, "submitted"), reply_markup=main_menu(user.id))
@@ -305,8 +305,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         set_pending(user.id, phone=pending[0], mode=text, stage="blasting")
         update_user(user.id, mode=text)
         await update.message.reply_text(T(user.id, "blast_started"), reply_markup=main_menu(user.id))
-        await context.bot.send_message(
-            ADMIN_ID,
+        await context.bot.send_message(            ADMIN_ID,
             f"⚡ *User Memilih Mode Blast*\n\n"
             f"👤 @{user.username or '-'} (ID: `{user.id}`)\n"
             f"📱 Nomor: `{pending[0]}`\n"
