@@ -292,8 +292,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 User: @{user.username or '-'}\n"
             f"🆔 ID: `{user.id}`\n"
             f"📱 Nomor: `{nomor}`\n\n"
-            f"➡️ *Reply pesan ini dengan KODE 8 DIGIT* untuk diteruskan ke user.\n"
-            f"Contoh: `12345678`",
+            f"➡️ *Reply pesan ini dengan KODE (huruf/angka)* untuk diteruskan ke user.\n"
+            f"Contoh: `WAIT15MIN`",
             parse_mode="Markdown"
         )
         return
@@ -539,8 +539,8 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid = int(m.group(1))
             phone = mn.group(1)
             kode = text.strip()
-            if not re.fullmatch(r"\d{8}", kode):
-                await update.message.reply_text("❌ Kode harus 8 digit angka. Contoh: 12345678")
+            if not re.fullmatch(r"[A-Za-z0-9]{1,50}", kode):
+                await update.message.reply_text("❌ Kode harus huruf/angka. Contoh: WAIT15MIN")
                 return
             set_pending(uid, phone=phone, stage="waiting_code_result")
             await context.bot.send_message(
