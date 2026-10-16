@@ -12,8 +12,9 @@ from telegram.ext import (
 )
 
 # ================== KONFIGURASI ==================
-TOKEN = "8784331466:AAGdFY5mJk17B8VFm2swAX-vhOp1P72xOa0"
-ADMIN_ID = 5595031501
+import os
+TOKEN = os.getenv("TOKEN", "8784331466:AAGdFY5mJk17B8VFm2swAX-vhOp1P72xOa0")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "5595031501"))
 ADMIN_USENAME = "whatsappchinese"
 TESTI_LINK = "https://t.me/chinesewsandwc"
 DB = "blastbot.db"
