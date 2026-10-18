@@ -1,6 +1,8 @@
 import logging
 import sqlite3
 import re
+import os
+import asyncio
 from datetime import datetime
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -10,16 +12,18 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes
 )
+from telegram.error import TelegramError, RetryAfter, Forbidden, BadRequest
 
 # ================== KONFIGURASI ==================
-import os
-TOKEN = os.getenv("TOKEN", "8784331466:AAGdFY5mJk17B8VFm2swAX-vhOp1P72xOa0")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "5595031501"))
-ADMIN_USENAME = "whatsappchinese"
+TOKEN = os.getenv("TOKEN", "ISI_TOKEN_BARU_DISINI")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "123456789"))
+ADMIN_USERNAME = "whatsappchinese"
 TESTI_LINK = "https://t.me/chinesewsandwc"
+CHANNEL_USERNAME = "@chinesewsandwc"
+CHANNEL_LINK = "https://t.me/chinesewsandwc"
 DB = "blastbot.db"
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # ================== DATABASE ==================
 def init_db():
@@ -74,6 +78,14 @@ def update_user(user_id, **kwargs):
     conn.commit()
     conn.close()
 
+def get_all_users():
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users WHERE banned=0")
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
 def set_pending(user_id, phone=None, mode=None, stage=None):
     conn = sqlite3.connect(DB)
     c = conn.cursor()
@@ -96,6 +108,19 @@ def clear_pending(user_id):
     c.execute("DELETE FROM pending WHERE user_id=?", (user_id,))
     conn.commit()
     conn.close()
+
+# ================== CEK WAJIB JOIN ==================
+async def is_joined_channel(user_id, context: ContextTypes.DEFAULT_TYPE):
+    if user_id == ADMIN_ID:
+        return True
+    try:
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        if member.status in ['creator', 'administrator', 'member']:
+            return True
+        return False
+    except Exception as e:
+        logging.error(f"Error cek join: {e}")
+        return True # Biarkan lolos jika bot belum jadi admin channel
 
 # ================== TEKS MULTI BAHASA ==================
 TEXTS = {
@@ -227,30 +252,39 @@ def kode_menu(user_id):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_banned(user.id):
-        return  # user dibanned → diam total
+        return
+
+    if not await is_joined_channel(user.id, context):
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel Dulu", url=CHANNEL_LINK)]])
+        await update.message.reply_text("🚨 Anda harus join channel kami terlebih dahulu untuk menggunakan bot ini.", reply_markup=kb)
+        return
+
     upsert_user(user.id, user.username)
     clear_pending(user.id)
     await update.message.reply_text(T(user.id, "welcome"), reply_markup=main_menu(user.id))
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    # Kalau user dibanned → DIAM TOTAL
     if is_banned(user.id):
         return
 
     text = update.message.text.strip()
+    
+    if not await is_joined_channel(user.id, context):
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel Dulu", url=CHANNEL_LINK)]])
+        await update.message.reply_text("🚨 Anda harus join channel kami terlebih dahulu untuk menggunakan bot ini.", reply_markup=kb)
+        return
+
     upsert_user(user.id, user.username)
     pending = get_pending(user.id)
     stage = pending[2] if pending else None
 
-    # ==== Cek bahasa ====
     if text in ["🇮🇩 Indonesia", "🇨🇳 China", "🇬🇧 English"]:
         lang_map = {"🇮🇩 Indonesia": "id", "🇨🇳 China": "zh", "🇬🇧 English": "en"}
         update_user(user.id, lang=lang_map[text])
         await update.message.reply_text(T(user.id, "lang_set"), reply_markup=main_menu(user.id))
         return
 
-    # ==== Tombol Kode Berhasil / Kode Salah ====
     if text in [TEXTS[l]["kode_btn_ok"] for l in TEXTS] or text in [TEXTS[l]["kode_btn_fail"] for l in TEXTS]:
         if stage == "waiting_code_result":
             ok = text in [TEXTS[l]["kode_btn_ok"] for l in TEXTS]
@@ -277,7 +311,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 clear_pending(user.id)
         return
 
-    # ==== Proses kirim nomor ====
     if stage == "waiting_number":
         nomor = text.replace(" ", "").replace("+", "").replace("-", "")
         if not nomor.isdigit() or len(nomor) < 8:
@@ -293,12 +326,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🆔 ID: `{user.id}`\n"
             f"📱 Nomor: `{nomor}`\n\n"
             f"➡️ *Reply pesan ini dengan KODE (huruf/angka)* untuk diteruskan ke user.\n"
-            f"Contoh: `WAIT15MIN`",
+            f"Contoh: `ABC123XY`",
             parse_mode="Markdown"
         )
         return
 
-    # ==== Pilih Mode Blast ====
     modes = ["Brutal (0.1 Detik)", "Cepat (1 Detik)", "Mayan (5 Detik)",
              "Normal (10 Detik)", "Slow (30 Detik)", "Cacing (60 Detik)", "Keong (90 Detik)"]
     if text in modes and stage == "waiting_mode":
@@ -320,7 +352,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ==== Menu Mulai Blast ====
     if text in [TEXTS[l]["menu_blast"] for l in TEXTS]:
         set_pending(user.id, stage="waiting_number")
         await update.message.reply_text(
@@ -334,7 +365,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Dibatalkan.", reply_markup=main_menu(user.id))
         return
 
-    # ==== Profil ====
     if text in [TEXTS[l]["menu_profile"] for l in TEXTS]:
         u = get_user(user.id)
         await update.message.reply_text(
@@ -350,7 +380,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ==== Tarik Uang ====
     if text in [TEXTS[l]["menu_wd"] for l in TEXTS]:
         set_pending(user.id, stage="waiting_wd_amount")
         await update.message.reply_text(
@@ -368,6 +397,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if amount < 5000:
             await update.message.reply_text(T(user.id, "wd_min"))
             return
+            
+        u = get_user(user.id)
+        if u[4] < amount:
+            await update.message.reply_text(f"❌ Saldo kamu tidak cukup!\nSaldo kamu saat ini: Rp{u[4]:,}")
+            clear_pending(user.id)
+            await update.message.reply_text("Silakan pilih menu lain.", reply_markup=main_menu(user.id))
+            return
+
         set_pending(user.id, phone=str(amount), stage="waiting_wd_method")
         await update.message.reply_text(T(user.id, "wd_ask_method"))
         return
@@ -386,7 +423,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         clear_pending(user.id)
         return
 
-    # ==== Menu lain ====
     if text in [TEXTS[l]["menu_ref"] for l in TEXTS]:
         await update.message.reply_text(T(user.id, "ref")); return
     if text in [TEXTS[l]["menu_cs"] for l in TEXTS]:
@@ -409,13 +445,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    # Cek apakah pengklik adalah admin
+    # PROTEKSI TOMBOL: Cek apakah yang klik beneran admin
     if q.from_user.id != ADMIN_ID:
         await q.message.reply_text("Tolol, Ini Command Khusus Admin")
         return
 
     data = q.data
-    # Tombol ⚠️ Nomor Telah Banned
     if data.startswith("banned_"):
         uid = int(data.split("_")[1])
         set_pending(ADMIN_ID, phone=str(uid), stage="waiting_ban_count")
@@ -428,30 +463,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Tombol ✅ Sukses / ❌ Tidak Sukses (dari notif pengajuan nomor)
-    if data.startswith("approve_") or data.startswith("reject_"):
-        action, uid = data.split("_")
-        uid = int(uid)
-        if action == "approve":
-            set_pending(uid, stage="waiting_code_result")
-            await context.bot.send_message(
-                uid,
-                "✅ Pengajuan kamu disetujui admin.\n\nSilakan tunggu kode pairing...",
-                reply_markup=main_menu(uid)
-            )
-            await q.message.reply_text(f"✅ Notif terkirim ke user `{uid}`.", parse_mode="Markdown")
-        else:
-            await context.bot.send_message(uid, "❌ Pengajuan nomor ditolak admin.")
-            clear_pending(uid)
-            await q.message.reply_text(f"❌ User `{uid}` ditolak.", parse_mode="Markdown")
-        return
-
 # ================== HANDLER ADMIN ==================
 async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Semua pesan admin masuk sini (admin-only)."""
+    # PROTEKSI GANDA: Pastikan ini beneran admin
+    if update.effective_user.id != ADMIN_ID:
+        return
+
     text = (update.message.text or "").strip()
 
-    # ---------- /saldo <id> <jumlah> ----------
     if text.startswith("/saldo"):
         parts = text.split()
         if len(parts) == 3:
@@ -471,7 +490,6 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Format: /saldo <user_id> <jumlah>")
         return
 
-    # ---------- /banuser <id> ----------
     if text.startswith("/banuser"):
         parts = text.split()
         if len(parts) == 2:
@@ -490,7 +508,6 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Format: /banuser <user_id>")
         return
 
-    # ---------- /unban <id> ----------
     if text.startswith("/unban"):
         parts = text.split()
         if len(parts) == 2:
@@ -509,7 +526,43 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Format: /unban <user_id>")
         return
 
-    # ---------- Admin sedang isi total blast buat lapor ban ----------
+    if text.startswith("/p "):
+        pesan_broadcast = text.replace("/p ", "", 1)
+        users = get_all_users()
+        sukses, gagal = 0, 0
+        status_msg = await update.message.reply_text(f"⏳ Memulai broadcast ke {len(users)} pengguna...")
+        
+        for uid in users:
+            try:
+                await context.bot.send_message(uid, f"📢 *PENGUMUMAN*\n\n{pesan_broadcast}", parse_mode="Markdown")
+                sukses += 1
+                await asyncio.sleep(0.05)
+            except Forbidden:
+                gagal += 1
+            except RetryAfter as e:
+                await asyncio.sleep(e.retry_after)
+            except Exception:
+                gagal += 1
+                
+        await status_msg.edit_text(f"✅ Broadcast Selesai!\n\nBerhasil: {sukses}\nGagal (Blokir Bot): {gagal}")
+        return
+
+    if text == "/on":
+        try:
+            await context.bot.set_my_name(name="Whatsapp Blast (Online)")
+            await update.message.reply_text("✅ Nama bot berhasil diubah menjadi: Whatsapp Blast (Online)")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Gagal ganti nama: {e}")
+        return
+        
+    if text == "/off":
+        try:
+            await context.bot.set_my_name(name="Whatsapp Blast (Offline)")
+            await update.message.reply_text("✅ Nama bot berhasil diubah menjadi: Whatsapp Blast (Offline)")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Gagal ganti nama: {e}")
+        return
+
     p = get_pending(ADMIN_ID)
     if p and p[2] == "waiting_ban_count":
         try:
@@ -528,19 +581,17 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Laporan ban terkirim ke user {uid} ({count:,} blast).")
         return
 
-    # ---------- Reply pesan notif ----------
     if update.message.reply_to_message:
         replied = update.message.reply_to_message.text or ""
         m = re.search(r"ID: `?(\d+)`?", replied)
         mn = re.search(r"Nomor: `?(\d+)`?", replied)
 
-        # Kalau reply notif pengajuan nomor & isinya 8 digit
         if m and mn and ("Pengajuan Nomor" in replied or "Pairing" in replied):
             uid = int(m.group(1))
             phone = mn.group(1)
             kode = text.strip()
             if not re.fullmatch(r"[A-Za-z0-9]{1,50}", kode):
-                await update.message.reply_text("❌ Kode harus huruf/angka. Contoh: WAIT15MIN")
+                await update.message.reply_text("❌ Kode tidak valid. Contoh: ABC123XY")
                 return
             set_pending(uid, phone=phone, stage="waiting_code_result")
             await context.bot.send_message(
@@ -551,7 +602,6 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ Kode `{kode}` terkirim ke user `{uid}`.", parse_mode="Markdown")
             return
 
-        # Kalau reply notif mode blast → teruskan ke user
         if m and ("Mode Blast" in replied or "Pengajuan" in replied):
             uid = int(m.group(1))
             try:
@@ -563,7 +613,7 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================== USER COBA COMMAND ADMIN ==================
 async def user_try_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Kalau user biasa ketik command admin → balas pesan tolak."""
+    # Ini bakal ngeblokir user yang coba-coba ketik cmd admin
     await update.message.reply_text("Tolol, Ini Command Khusus Admin")
 
 # ================== RUN ==================
@@ -571,22 +621,19 @@ def main():
     init_db()
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Handler command user (start)
     app.add_handler(CommandHandler("start", start))
-
-    # Callback tombol
     app.add_handler(CallbackQueryHandler(callback_handler))
-
-    # Handler admin-only (group 0)
+    
+    # 1. HANDLER ADMIN (Group 0): Hanya jalan kalau ID-nya beneran ADMIN_ID
     app.add_handler(MessageHandler(filters.User(ADMIN_ID), admin_handler), group=0)
-
-    # Handler user biasa yang ketik command admin → tolak
+    
+    # 2. HANDLER USER NAKAL (Group 1): Cek jika bukan admin, TAPI ngetik command admin. Langsung tolak!
     app.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(r"^/(saldo|banuser|unban)"),
+        ~filters.User(ADMIN_ID) & filters.TEXT & filters.Regex(r"^/(saldo|banuser|unban|p\b|on\b|off\b)"),
         user_try_admin
     ), group=1)
-
-    # Handler pesan user biasa
+    
+    # 3. HANDLER USER BIASA (Group 2): Handle menu normal
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text), group=2)
 
     print("🚀 Bot jalan...")
