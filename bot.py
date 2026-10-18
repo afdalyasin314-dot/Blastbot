@@ -17,7 +17,7 @@ from telegram.error import TelegramError, RetryAfter, Forbidden, BadRequest
 # ================== KONFIGURASI ==================
 TOKEN = os.getenv("TOKEN", "ISI_TOKEN_BARU_DISINI")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "123456789"))
-ADMIN_USERNAME = "whatsappchinese"
+ADMIN_USERNAME = "Whatsappchinese"
 TESTI_LINK = "https://t.me/chinesewsandwc"
 CHANNEL_USERNAME = "@chinesewsandwc"
 CHANNEL_LINK = "https://t.me/chinesewsandwc"
