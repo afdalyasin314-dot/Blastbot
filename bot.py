@@ -22,6 +22,7 @@ TESTI_LINK = "https://t.me/chinesewsandwc"
 CHANNEL_USERNAME = "@chinesewsandwc"
 CHANNEL_LINK = "https://t.me/chinesewsandwc"
 DB = "blastbot.db"
+BOT_USERNAME = "Blast_Whatsapp_Bot" # GANTI DENGAN USERNAME BOT KAMU (tanpa @)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
@@ -37,8 +38,17 @@ def init_db():
         balance INTEGER DEFAULT 0,
         mode TEXT,
         banned INTEGER DEFAULT 0,
-        joined TEXT
+        joined TEXT,
+        referred_by INTEGER DEFAULT NULL,
+        ref_count INTEGER DEFAULT 0
     )""")
+    # Migrasi otomatis kalau tabel lama belum ada kolom referral
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER DEFAULT NULL")
+        c.execute("ALTER TABLE users ADD COLUMN ref_count INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+        
     c.execute("""CREATE TABLE IF NOT EXISTS pending (
         user_id INTEGER PRIMARY KEY,
         phone TEXT,
@@ -60,13 +70,15 @@ def is_banned(user_id):
     u = get_user(user_id)
     return bool(u and u[6])
 
-def upsert_user(user_id, username=None):
+def upsert_user(user_id, username=None, referrer_id=None):
     conn = sqlite3.connect(DB)
     c = conn.cursor()
     c.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
     if not c.fetchone():
-        c.execute("INSERT INTO users (user_id, username, lang, joined) VALUES (?,?,?,?)",
-                  (user_id, username, 'id', datetime.now().isoformat()))
+        c.execute("INSERT INTO users (user_id, username, lang, joined, referred_by) VALUES (?,?,?,?,?)",
+                  (user_id, username, 'id', datetime.now().isoformat(), referrer_id))
+        if referrer_id:
+            c.execute("UPDATE users SET ref_count = ref_count + 1 WHERE user_id=?", (referrer_id,))
     conn.commit()
     conn.close()
 
@@ -120,7 +132,7 @@ async def is_joined_channel(user_id, context: ContextTypes.DEFAULT_TYPE):
         return False
     except Exception as e:
         logging.error(f"Error cek join: {e}")
-        return True # Biarkan lolos jika bot belum jadi admin channel
+        return True
 
 # ================== TEKS MULTI BAHASA ==================
 TEXTS = {
@@ -138,12 +150,10 @@ TEXTS = {
         "kode_btn_ok": "✅ Kode Berhasil",
         "kode_btn_fail": "❌ Kode Salah",
         "blast_started": "🚀 Nomor Sedang Di Blast",
-        "banned_menu": "⚠️ Nomor Telah Banned",
         "wd_min": "❌ Minimal penarikan Rp5.000",
         "wd_ask_amount": "Masukkan nominal penarikan (min Rp5.000):",
         "wd_ask_method": "Masukkan metode & nomor tujuan (contoh: DANA 08123456789):",
         "wd_sent": "✅ Permintaan penarikan dikirim, tunggu konfirmasi admin.",
-        "ref": f"🔧 Referral sedang Maintenance\n\nLihat testimoni: {TESTI_LINK}",
         "rank": "🔧 Papan Peringkat sedang Maintenance",
         "hist": "🔧 History sedang Maintenance",
         "app": "❌ Error 404",
@@ -164,12 +174,10 @@ TEXTS = {
         "kode_btn_ok": "✅ Code Success",
         "kode_btn_fail": "❌ Code Wrong",
         "blast_started": "🚀 Number is Being Blasted",
-        "banned_menu": "⚠️ Number Has Been Banned",
         "wd_min": "❌ Minimum withdrawal Rp5,000",
         "wd_ask_amount": "Enter withdrawal amount (min Rp5,000):",
         "wd_ask_method": "Enter method & destination (e.g. DANA 08123456789):",
         "wd_sent": "✅ Withdrawal request sent, wait for admin confirmation.",
-        "ref": f"🔧 Referral under Maintenance\n\nSee testimonials: {TESTI_LINK}",
         "rank": "🔧 Leaderboard under Maintenance",
         "hist": "🔧 History under Maintenance",
         "app": "❌ Error 404",
@@ -190,12 +198,10 @@ TEXTS = {
         "kode_btn_ok": "✅ 配对成功",
         "kode_btn_fail": "❌ 配对错误",
         "blast_started": "🚀 号码正在群发中",
-        "banned_menu": "⚠️ 号码已被封禁",
         "wd_min": "❌ 最低提现 Rp5.000",
         "wd_ask_amount": "输入提现金额 (最低 Rp5.000):",
         "wd_ask_method": "输入方式及账号 (例: DANA 08123456789):",
         "wd_sent": "✅ 提现请求已发送，请等待管理员确认。",
-        "ref": f"🔧 推荐功能维护中\n\n查看客户评价: {TESTI_LINK}",
         "rank": "🔧 排行榜维护中",
         "hist": "🔧 历史记录维护中",
         "app": "❌ 错误 404",
@@ -223,21 +229,16 @@ def main_menu(user_id):
 
 def mode_menu():
     kb = [
-        [KeyboardButton("Brutal (0.1 Detik)")],
-        [KeyboardButton("Cepat (1 Detik)")],
-        [KeyboardButton("Mayan (5 Detik)")],
-        [KeyboardButton("Normal (10 Detik)")],
-        [KeyboardButton("Slow (30 Detik)")],
-        [KeyboardButton("Cacing (60 Detik)")],
+        [KeyboardButton("Brutal (0.1 Detik)")], [KeyboardButton("Cepat (1 Detik)")],
+        [KeyboardButton("Mayan (5 Detik)")], [KeyboardButton("Normal (10 Detik)")],
+        [KeyboardButton("Slow (30 Detik)")], [KeyboardButton("Cacing (60 Detik)")],
         [KeyboardButton("Keong (90 Detik)")],
     ]
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
 
 def lang_menu():
     kb = [
-        [KeyboardButton("🇮🇩 Indonesia")],
-        [KeyboardButton("🇨🇳 China")],
-        [KeyboardButton("🇬🇧 English")],
+        [KeyboardButton("🇮🇩 Indonesia")], [KeyboardButton("🇨🇳 China")], [KeyboardButton("🇬🇧 English")],
     ]
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
 
@@ -256,11 +257,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not await is_joined_channel(user.id, context):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel Dulu", url=CHANNEL_LINK)]])
-        await update.message.reply_text("🚨 Anda harus join channel kami terlebih dahulu untuk menggunakan bot ini.", reply_markup=kb)
+        await update.message.reply_text("🚨 Anda harus join channel kami terlebih dahulu.", reply_markup=kb)
         return
 
-    upsert_user(user.id, user.username)
+    referrer_id = None
+    if context.args and len(context.args) > 0:
+        try:
+            ref_id = int(context.args[0])
+            if ref_id != user.id:
+                referrer_id = ref_id
+        except ValueError:
+            pass
+
+    upsert_user(user.id, user.username, referrer_id)
     clear_pending(user.id)
+    
+    if referrer_id:
+        await update.message.reply_text("🎉 Kamu berhasil join lewat link Referral!")
+        
     await update.message.reply_text(T(user.id, "welcome"), reply_markup=main_menu(user.id))
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -272,7 +286,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not await is_joined_channel(user.id, context):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Join Channel Dulu", url=CHANNEL_LINK)]])
-        await update.message.reply_text("🚨 Anda harus join channel kami terlebih dahulu untuk menggunakan bot ini.", reply_markup=kb)
+        await update.message.reply_text("🚨 Anda harus join channel kami terlebih dahulu.", reply_markup=kb)
         return
 
     upsert_user(user.id, user.username)
@@ -291,23 +305,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status = "✅ KODE BERHASIL" if ok else "❌ KODE SALAH"
             await context.bot.send_message(
                 ADMIN_ID,
-                f"📢 *Update Status Kode*\n\n"
-                f"👤 @{user.username or '-'} (ID: `{user.id}`)\n"
-                f"📱 Nomor: `{pending[0]}`\n"
-                f"Status: *{status}*",
+                f"📢 *Update Status Kode*\n\n👤 @{user.username or '-'} (ID: `{user.id}`)\n📱 Nomor: `{pending[0]}`\nStatus: *{status}*",
                 parse_mode="Markdown"
             )
             if ok:
                 set_pending(user.id, phone=pending[0], stage="waiting_mode")
-                await update.message.reply_text(
-                    "✅ Kode diterima!\n\nPilihlah Mode Blast:",
-                    reply_markup=mode_menu()
-                )
+                await update.message.reply_text("✅ Kode diterima!\n\nPilihlah Mode Blast:", reply_markup=mode_menu())
             else:
-                await update.message.reply_text(
-                    "❌ Kode salah. Silakan hubungi admin untuk kode baru.",
-                    reply_markup=main_menu(user.id)
-                )
+                await update.message.reply_text("❌ Kode salah. Silakan hubungi admin untuk kode baru.", reply_markup=main_menu(user.id))
                 clear_pending(user.id)
         return
 
@@ -321,43 +326,27 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(T(user.id, "submitted"), reply_markup=main_menu(user.id))
         await context.bot.send_message(
             ADMIN_ID,
-            f"📥 *Pengajuan Nomor Baru (Pairing Code)*\n\n"
-            f"👤 User: @{user.username or '-'}\n"
-            f"🆔 ID: `{user.id}`\n"
-            f"📱 Nomor: `{nomor}`\n\n"
-            f"➡️ *Reply pesan ini dengan KODE (huruf/angka)* untuk diteruskan ke user.\n"
-            f"Contoh: `ABC123XY`",
+            f"📥 *Pengajuan Nomor Baru (Pairing Code)*\n\n👤 User: @{user.username or '-'}\n🆔 ID: `{user.id}`\n📱 Nomor: `{nomor}`\n\n➡️ *Reply pesan ini dengan KODE* untuk diteruskan ke user.\nContoh: `ABC123XY`",
             parse_mode="Markdown"
         )
         return
 
-    modes = ["Brutal (0.1 Detik)", "Cepat (1 Detik)", "Mayan (5 Detik)",
-             "Normal (10 Detik)", "Slow (30 Detik)", "Cacing (60 Detik)", "Keong (90 Detik)"]
+    modes = ["Brutal (0.1 Detik)", "Cepat (1 Detik)", "Mayan (5 Detik)", "Normal (10 Detik)", "Slow (30 Detik)", "Cacing (60 Detik)", "Keong (90 Detik)"]
     if text in modes and stage == "waiting_mode":
         set_pending(user.id, phone=pending[0], mode=text, stage="blasting")
         update_user(user.id, mode=text)
         await update.message.reply_text(T(user.id, "blast_started"), reply_markup=main_menu(user.id))
         await context.bot.send_message(
             ADMIN_ID,
-            f"⚡ *User Memilih Mode Blast*\n\n"
-            f"👤 @{user.username or '-'} (ID: `{user.id}`)\n"
-            f"📱 Nomor: `{pending[0]}`\n"
-            f"🎯 Mode: *{text}*\n\n"
-            f"➡️ Reply pesan ini untuk kirim pesan ke user.\n"
-            f"➡️ Klik tombol di bawah untuk lapor ban.",
+            f"⚡ *User Memilih Mode Blast*\n\n👤 @{user.username or '-'} (ID: `{user.id}`)\n📱 Nomor: `{pending[0]}`\n🎯 Mode: *{text}*\n\n➡️ Reply pesan ini untuk kirim pesan ke user.\n➡️ Klik tombol di bawah untuk lapor ban.",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("⚠️ Nomor Telah Banned", callback_data=f"banned_{user.id}")
-            ]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚠️ Nomor Telah Banned", callback_data=f"banned_{user.id}")]])
         )
         return
 
     if text in [TEXTS[l]["menu_blast"] for l in TEXTS]:
         set_pending(user.id, stage="waiting_number")
-        await update.message.reply_text(
-            T(user.id, "ask_number"),
-            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ Batal")]], resize_keyboard=True)
-        )
+        await update.message.reply_text(T(user.id, "ask_number"), reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ Batal")]], resize_keyboard=True))
         return
 
     if text == "❌ Batal":
@@ -368,24 +357,28 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in [TEXTS[l]["menu_profile"] for l in TEXTS]:
         u = get_user(user.id)
         await update.message.reply_text(
-            f"👤 *Profil*\n\n"
-            f"🆔 ID: `{user.id}`\n"
-            f"📱 Nomor: `{u[2] or '-'}`\n"
-            f"💰 Saldo: *Rp{u[4]:,}*\n"
-            f"🎯 Mode: {u[5] or '-'}\n"
-            f"🌐 Bahasa: {u[3].upper()}\n"
-            f"📅 Join: {u[7][:10] if u[7] else '-'}\n\n"
-            f"💳 Metode Penarikan: DANA / OVO / GOPAY",
+            f"👤 *Profil*\n\n🆔 ID: `{user.id}`\n📱 Nomor: `{u[2] or '-'}`\n💰 Saldo: *Rp{u[4]:,}*\n🎯 Mode: {u[5] or '-'}\n🌐 Bahasa: {u[3].upper()}\n📅 Join: {u[7][:10] if u[7] else '-'}\n\n💳 Metode Penarikan: DANA / OVO / GOPAY",
             parse_mode="Markdown"
         )
         return
 
+    if text in [TEXTS[l]["menu_ref"] for l in TEXTS]:
+        u = get_user(user.id)
+        ref_count = u[9] if len(u) > 9 else 0
+        link = f"https://t.me/{BOT_USERNAME}?start={user.id}"
+        
+        teks_ref = (
+            f"🔗 *Menu Referral*\n\n"
+            f"Bagikan link ini ke teman kamu:\n`{link}`\n\n"
+            f"👥 Total teman diundang: *{ref_count} orang*\n\n"
+            f"💡 _Ajak teman sebanyak mungkin! Kamu akan dapat komisi Rp200 untuk setiap chat yang berhasil di-blast oleh teman yang kamu undang._"
+        )
+        await update.message.reply_text(teks_ref, parse_mode="Markdown")
+        return
+
     if text in [TEXTS[l]["menu_wd"] for l in TEXTS]:
         set_pending(user.id, stage="waiting_wd_amount")
-        await update.message.reply_text(
-            T(user.id, "wd_ask_amount"),
-            reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ Batal")]], resize_keyboard=True)
-        )
+        await update.message.reply_text(T(user.id, "wd_ask_amount"), reply_markup=ReplyKeyboardMarkup([[KeyboardButton("❌ Batal")]], resize_keyboard=True))
         return
 
     if stage == "waiting_wd_amount":
@@ -397,7 +390,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if amount < 5000:
             await update.message.reply_text(T(user.id, "wd_min"))
             return
-            
         u = get_user(user.id)
         if u[4] < amount:
             await update.message.reply_text(f"❌ Saldo kamu tidak cukup!\nSaldo kamu saat ini: Rp{u[4]:,}")
@@ -414,17 +406,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(T(user.id, "wd_sent"), reply_markup=main_menu(user.id))
         await context.bot.send_message(
             ADMIN_ID,
-            f"💸 *Permintaan Tarik Uang*\n\n"
-            f"👤 @{user.username or '-'} (ID: `{user.id}`)\n"
-            f"💰 Jumlah: *Rp{int(amount):,}*\n"
-            f"🏦 Metode: {text}",
+            f"💸 *Permintaan Tarik Uang*\n\n👤 @{user.username or '-'} (ID: `{user.id}`)\n💰 Jumlah: *Rp{int(amount):,}*\n🏦 Metode: {text}",
             parse_mode="Markdown"
         )
         clear_pending(user.id)
         return
 
-    if text in [TEXTS[l]["menu_ref"] for l in TEXTS]:
-        await update.message.reply_text(T(user.id, "ref")); return
     if text in [TEXTS[l]["menu_cs"] for l in TEXTS]:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("💬 Chat Admin", url=f"https://t.me/{ADMIN_USERNAME}")]])
         await update.message.reply_text("Klik tombol di bawah untuk chat admin:", reply_markup=kb)
@@ -440,143 +427,155 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("Ketik /start untuk kembali ke menu utama.")
 
-# ================== CALLBACK TOMBOL ADMIN ==================
+# ================== CALLBACK & ADMIN HANDLER ==================
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
-    # PROTEKSI TOMBOL: Cek apakah yang klik beneran admin
     if q.from_user.id != ADMIN_ID:
         await q.message.reply_text("Tolol, Ini Command Khusus Admin")
         return
 
-    data = q.data
-    if data.startswith("banned_"):
-        uid = int(data.split("_")[1])
+    if q.data.startswith("banned_"):
+        uid = int(q.data.split("_")[1])
         set_pending(ADMIN_ID, phone=str(uid), stage="waiting_ban_count")
-        await q.message.reply_text(
-            f"📊 *Lapor Ban User*\n\n"
-            f"👤 User ID: `{uid}`\n\n"
-            f"Ketik total blast yang berhasil terkirim (angka saja).\n"
-            f"Contoh: `1247`",
-            parse_mode="Markdown"
-        )
+        await q.message.reply_text(f"📊 *Lapor Ban User*\n\n👤 User ID: `{uid}`\n\nKetik total blast yang berhasil terkirim (angka saja).\nContoh: `1247`", parse_mode="Markdown")
         return
 
-# ================== HANDLER ADMIN ==================
 async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # PROTEKSI GANDA: Pastikan ini beneran admin
     if update.effective_user.id != ADMIN_ID:
         return
-
     text = (update.message.text or "").strip()
 
     if text.startswith("/saldo"):
         parts = text.split()
         if len(parts) == 3:
-            try:
-                uid = int(parts[1]); amt = int(parts[2])
-            except:
-                await update.message.reply_text("Format: /saldo <user_id> <jumlah>")
-                return
+            try: uid, amt = int(parts[1]), int(parts[2])
+            except: await update.message.reply_text("Format: /saldo <user_id> <jumlah>"); return
             u = get_user(uid)
             if u:
                 update_user(uid, balance=u[4] + amt)
                 await context.bot.send_message(uid, f"💰 Saldo kamu bertambah *Rp{amt:,}*", parse_mode="Markdown")
                 await update.message.reply_text(f"✅ Berhasil. Saldo user {uid} +Rp{amt:,}")
+            else: await update.message.reply_text("❌ User tidak ditemukan.")
+        else: await update.message.reply_text("Format: /saldo <user_id> <jumlah>")
+        return
+
+    # COMMAND BARU: /komisi <id_downline> <jumlah_chat>
+    if text.startswith("/komisi"):
+        parts = text.split()
+        if len(parts) == 3:
+            try: 
+                downline_id = int(parts[1])
+                total_chat = int(parts[2])
+            except: 
+                await update.message.reply_text("Format: /komisi <id_downline> <jumlah_chat>"); return
+            
+            # Cari data downline
+            downline = get_user(downline_id)
+            if not downline:
+                await update.message.reply_text("❌ User downline tidak ditemukan.")
+                return
+                
+            referrer_id = downline[8] # Kolom referred_by
+            if not referrer_id:
+                await update.message.reply_text("❌ User ini tidak punya pengundang (bukan dari referral).")
+                return
+                
+            # Hitung komisi
+            komisi = total_chat * 200
+            referrer = get_user(referrer_id)
+            
+            if referrer:
+                update_user(referrer_id, balance=referrer[4] + komisi)
+                
+                # Notif ke Admin
+                await update.message.reply_text(
+                    f"✅ Komisi berhasil dibagikan!\n\n"
+                    f"👤 Downline: @{downline[1] or '-'} (ID: `{downline_id}`)\n"
+                    f"💬 Total Blast: {total_chat:,} chat\n"
+                    f"💰 Komisi (Rp200/chat): *Rp{komisi:,}*\n"
+                    f"➡️ Masuk ke saldo pengundang: @{referrer[1] or '-'} (ID: `{referrer_id}`)",
+                    parse_mode="Markdown"
+                )
+                
+                # Notif ke Pengundang
+                try:
+                    await context.bot.send_message(
+                        referrer_id, 
+                        f"🎉 *BONUS KOMISI MASUK!*\n\n"
+                        f"Teman yang kamu undang (@{downline[1] or 'User'}) baru saja melakukan blast.\n"
+                        f"💬 Total Blast: {total_chat:,} chat\n"
+                        f"💰 Komisi kamu: *Rp{komisi:,}*\n\n"
+                        f"Saldo kamu sekarang bertambah! Cek menu Profil ya.",
+                        parse_mode="Markdown"
+                    )
+                except: pass
             else:
-                await update.message.reply_text("❌ User tidak ditemukan.")
+                await update.message.reply_text("❌ Data pengundang tidak ditemukan di database.")
         else:
-            await update.message.reply_text("Format: /saldo <user_id> <jumlah>")
+            await update.message.reply_text("Format: /komisi <id_downline> <jumlah_chat>")
         return
 
     if text.startswith("/banuser"):
         parts = text.split()
         if len(parts) == 2:
-            try:
-                uid = int(parts[1])
-            except:
-                await update.message.reply_text("Format: /banuser <user_id>")
-                return
+            try: uid = int(parts[1])
+            except: await update.message.reply_text("Format: /banuser <user_id>"); return
             u = get_user(uid)
-            if not u:
-                await update.message.reply_text("❌ User tidak ditemukan.")
-                return
+            if not u: await update.message.reply_text("❌ User tidak ditemukan."); return
             update_user(uid, banned=1)
             await update.message.reply_text(f"✅ Berhasil. User {uid} telah dibanned.")
-        else:
-            await update.message.reply_text("Format: /banuser <user_id>")
+        else: await update.message.reply_text("Format: /banuser <user_id>")
         return
 
     if text.startswith("/unban"):
         parts = text.split()
         if len(parts) == 2:
-            try:
-                uid = int(parts[1])
-            except:
-                await update.message.reply_text("Format: /unban <user_id>")
-                return
+            try: uid = int(parts[1])
+            except: await update.message.reply_text("Format: /unban <user_id>"); return
             u = get_user(uid)
-            if not u:
-                await update.message.reply_text("❌ User tidak ditemukan.")
-                return
+            if not u: await update.message.reply_text("❌ User tidak ditemukan."); return
             update_user(uid, banned=0)
             await update.message.reply_text(f"✅ User {uid} telah di-unban.")
-        else:
-            await update.message.reply_text("Format: /unban <user_id>")
+        else: await update.message.reply_text("Format: /unban <user_id>")
         return
 
     if text.startswith("/p "):
-        pesan_broadcast = text.replace("/p ", "", 1)
+        pesan = text.replace("/p ", "", 1)
         users = get_all_users()
         sukses, gagal = 0, 0
         status_msg = await update.message.reply_text(f"⏳ Memulai broadcast ke {len(users)} pengguna...")
-        
         for uid in users:
             try:
-                await context.bot.send_message(uid, f"📢 *PENGUMUMAN*\n\n{pesan_broadcast}", parse_mode="Markdown")
+                await context.bot.send_message(uid, f"📢 *PENGUMUMAN*\n\n{pesan}", parse_mode="Markdown")
                 sukses += 1
                 await asyncio.sleep(0.05)
-            except Forbidden:
-                gagal += 1
-            except RetryAfter as e:
-                await asyncio.sleep(e.retry_after)
-            except Exception:
-                gagal += 1
-                
+            except Forbidden: gagal += 1
+            except RetryAfter as e: await asyncio.sleep(e.retry_after)
+            except Exception: gagal += 1
         await status_msg.edit_text(f"✅ Broadcast Selesai!\n\nBerhasil: {sukses}\nGagal (Blokir Bot): {gagal}")
         return
 
     if text == "/on":
         try:
             await context.bot.set_my_name(name="Whatsapp Blast (Online)")
-            await update.message.reply_text("✅ Nama bot berhasil diubah menjadi: Whatsapp Blast (Online)")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Gagal ganti nama: {e}")
+            await update.message.reply_text("✅ Nama bot diubah menjadi: Whatsapp Blast (Online)")
+        except Exception as e: await update.message.reply_text(f"❌ Gagal: {e}")
         return
         
     if text == "/off":
         try:
             await context.bot.set_my_name(name="Whatsapp Blast (Offline)")
-            await update.message.reply_text("✅ Nama bot berhasil diubah menjadi: Whatsapp Blast (Offline)")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Gagal ganti nama: {e}")
+            await update.message.reply_text("✅ Nama bot diubah menjadi: Whatsapp Blast (Offline)")
+        except Exception as e: await update.message.reply_text(f"❌ Gagal: {e}")
         return
 
     p = get_pending(ADMIN_ID)
     if p and p[2] == "waiting_ban_count":
-        try:
-            count = int(text.replace(".", "").replace(",", ""))
-        except:
-            await update.message.reply_text("❌ Ketik angka saja. Contoh: 1247")
-            return
+        try: count = int(text.replace(".", "").replace(",", ""))
+        except: await update.message.reply_text("❌ Ketik angka saja. Contoh: 1247"); return
         uid = int(p[0])
-        await context.bot.send_message(
-            uid,
-            f"⚠️ Nomor Kamu Telah Banned\n\n"
-            f"✅ Total blast berhasil: {count:,} pesan terkirim",
-            reply_markup=main_menu(uid)
-        )
+        await context.bot.send_message(uid, f"⚠️ Nomor Kamu Telah Banned\n\n✅ Total blast berhasil: {count:,} pesan terkirim", reply_markup=main_menu(uid))
         clear_pending(ADMIN_ID)
         await update.message.reply_text(f"✅ Laporan ban terkirim ke user {uid} ({count:,} blast).")
         return
@@ -587,18 +586,11 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mn = re.search(r"Nomor: `?(\d+)`?", replied)
 
         if m and mn and ("Pengajuan Nomor" in replied or "Pairing" in replied):
-            uid = int(m.group(1))
-            phone = mn.group(1)
-            kode = text.strip()
+            uid, phone, kode = int(m.group(1)), mn.group(1), text.strip()
             if not re.fullmatch(r"[A-Za-z0-9]{1,50}", kode):
-                await update.message.reply_text("❌ Kode tidak valid. Contoh: ABC123XY")
-                return
+                await update.message.reply_text("❌ Kode tidak valid. Contoh: ABC123XY"); return
             set_pending(uid, phone=phone, stage="waiting_code_result")
-            await context.bot.send_message(
-                uid,
-                T(uid, "code_sent").format(code=kode),
-                reply_markup=kode_menu(uid)
-            )
+            await context.bot.send_message(uid, T(uid, "code_sent").format(code=kode), reply_markup=kode_menu(uid))
             await update.message.reply_text(f"✅ Kode `{kode}` terkirim ke user `{uid}`.", parse_mode="Markdown")
             return
 
@@ -607,13 +599,10 @@ async def admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(uid, text)
                 await update.message.reply_text("✅ Pesan terkirim ke user.")
-            except Exception as e:
-                await update.message.reply_text(f"❌ Gagal kirim: {e}")
+            except Exception as e: await update.message.reply_text(f"❌ Gagal kirim: {e}")
             return
 
-# ================== USER COBA COMMAND ADMIN ==================
 async def user_try_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Ini bakal ngeblokir user yang coba-coba ketik cmd admin
     await update.message.reply_text("Tolol, Ini Command Khusus Admin")
 
 # ================== RUN ==================
@@ -623,17 +612,8 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    
-    # 1. HANDLER ADMIN (Group 0): Hanya jalan kalau ID-nya beneran ADMIN_ID
     app.add_handler(MessageHandler(filters.User(ADMIN_ID), admin_handler), group=0)
-    
-    # 2. HANDLER USER NAKAL (Group 1): Cek jika bukan admin, TAPI ngetik command admin. Langsung tolak!
-    app.add_handler(MessageHandler(
-        ~filters.User(ADMIN_ID) & filters.TEXT & filters.Regex(r"^/(saldo|banuser|unban|p\b|on\b|off\b)"),
-        user_try_admin
-    ), group=1)
-    
-    # 3. HANDLER USER BIASA (Group 2): Handle menu normal
+    app.add_handler(MessageHandler(~filters.User(ADMIN_ID) & filters.TEXT & filters.Regex(r"^/(saldo|banuser|unban|p\b|on\b|off\b|komisi\b)"), user_try_admin), group=1)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text), group=2)
 
     print("🚀 Bot jalan...")
