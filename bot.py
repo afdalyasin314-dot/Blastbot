@@ -150,8 +150,8 @@ TEXTS = {
         "kode_btn_ok": "✅ Kode Berhasil",
         "kode_btn_fail": "❌ Kode Salah",
         "blast_started": "🚀 Nomor Sedang Di Blast",
-        "wd_min": "❌ Minimal penarikan Rp5.000",
-        "wd_ask_amount": "Masukkan nominal penarikan (min Rp5.000):",
+        "wd_min": "❌ Minimal penarikan Rp15.000",
+        "wd_ask_amount": "Masukkan nominal penarikan (min Rp15.000):",
         "wd_ask_method": "Masukkan metode & nomor tujuan (contoh: DANA 08123456789):",
         "wd_sent": "✅ Permintaan penarikan dikirim, tunggu konfirmasi admin.",
         "rank": "🔧 Papan Peringkat sedang Maintenance",
@@ -174,8 +174,8 @@ TEXTS = {
         "kode_btn_ok": "✅ Code Success",
         "kode_btn_fail": "❌ Code Wrong",
         "blast_started": "🚀 Number is Being Blasted",
-        "wd_min": "❌ Minimum withdrawal Rp5,000",
-        "wd_ask_amount": "Enter withdrawal amount (min Rp5,000):",
+        "wd_min": "❌ Minimum withdrawal Rp15.000",
+        "wd_ask_amount": "Enter withdrawal amount (min Rp15.000):",
         "wd_ask_method": "Enter method & destination (e.g. DANA 08123456789):",
         "wd_sent": "✅ Withdrawal request sent, wait for admin confirmation.",
         "rank": "🔧 Leaderboard under Maintenance",
@@ -198,8 +198,8 @@ TEXTS = {
         "kode_btn_ok": "✅ 配对成功",
         "kode_btn_fail": "❌ 配对错误",
         "blast_started": "🚀 号码正在群发中",
-        "wd_min": "❌ 最低提现 Rp5.000",
-        "wd_ask_amount": "输入提现金额 (最低 Rp5.000):",
+        "wd_min": "❌ 最低提现 Rp15.000",
+        "wd_ask_amount": "输入提现金额 (最低 Rp15.000):",
         "wd_ask_method": "输入方式及账号 (例: DANA 08123456789):",
         "wd_sent": "✅ 提现请求已发送，请等待管理员确认。",
         "rank": "🔧 排行榜维护中",
@@ -387,7 +387,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             await update.message.reply_text("❌ Masukkan angka yang valid.")
             return
-        if amount < 5000:
+        if amount < 15000:
             await update.message.reply_text(T(user.id, "wd_min"))
             return
         u = get_user(user.id)
